@@ -4,6 +4,10 @@ inputs:
   slack-webhook-url:
     description: "Slack Webhook URL for notifications"
     required: true
+outputs:
+  summary:
+    description: "Human-readable scan summary for Slack or logs"
+    value: ${{ steps.prepare-summary.outputs.summary }}
 runs:
   using: "composite"
   steps:
@@ -71,28 +75,43 @@ runs:
         echo "summary=$final" >> $GITHUB_ENV
       shell: bash
 
+    - id: prepare-summary
+      name: Prepare summary output
+      run: |
+        # Expose summary as an action output
+        printf "summary=%s\n" "${summary}" >> "$GITHUB_OUTPUT"
+      shell: bash
+
     - name: Notify to Slack
+      env:
+        PREVIEW_MESSAGE: ${{ steps.prepare-summary.outputs.summary }}
       run: |
         echo "\n📣 Preparing to notify Slack..."
-        echo "Webhook: ${SLACK_WEBHOOK_URL:+(set)}${SLACK_WEBHOOK_URL:-(not set)}"
         echo "Preview message:"
-        printf "%b\n" "${summary:-$SCAN_OUTPUT}"
+        printf "%b\n" "$PREVIEW_MESSAGE"
       shell: bash
 
     - name: Notify Slack
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
-        SCAN_OUTPUT: ${{ env.summary }}
+        SCAN_OUTPUT: ${{ steps.prepare-summary.outputs.summary }}
       run: |
         echo "\n🚀 Sending Slack notification..."
         payload=$(jq -n --arg text "$SCAN_OUTPUT" '{text: $text}')
         echo "Payload:" && echo "$payload"
-        curl -s -o /tmp/slack_resp.txt -w "status:%{http_code}\n" -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
-        status_line=$(tail -n1 /tmp/slack_resp.txt)
-        if echo "$status_line" | grep -q "status:200"; then
-          echo "✅ Slack notified successfully"
+
+        # Capture HTTP status separately from body.
+        http_code=$(curl -s -o /tmp/slack_body.txt -w "%{http_code}" -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL" || echo "000")
+        body=$(cat /tmp/slack_body.txt 2>/dev/null || echo "")
+
+        if [ "$http_code" = "200" ]; then
+          if [ "$body" = "ok" ]; then
+            echo "✅ Slack notified successfully (200)"
+          else
+            echo "⚠️ Slack responded 200 with unexpected body: $body"
+          fi
         else
-          echo "❌ Slack notification failed ($status_line)"
-          echo "Response body:" && sed '$d' /tmp/slack_resp.txt || true
+          echo "❌ Slack notification failed (HTTP $http_code)"
+          echo "Response body: $body"
         fi
       shell: bash
