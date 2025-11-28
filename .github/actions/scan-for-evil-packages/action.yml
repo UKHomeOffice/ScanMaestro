@@ -34,22 +34,30 @@ runs:
           echo "=== Scanning branch: $br ==="
           git checkout --force -B "$br" "origin/$br"
           node hof-vulnerabilities-scanner/index.js --out "scan-results-${br}.json" || true
-          cnt=$(jq '.vulnerabilitiesCount // 0' "scan-results-${br}.json" 2>/dev/null || echo 0)
+          cnt=$(jq '.meta.vulnerabilitiesCount // 0' "$GITHUB_WORKSPACE/scan-results.json" 2>/dev/null || echo 0)
           if [ "$cnt" -gt 0 ]; then
             any_compromised=1
-            summary="${summary}${br}: ${cnt} compromised packages\n"
+            summary="${summary}${br}: ${cnt} compromised packages❗️
+          "
           else
-            summary="${summary}${br}: 0\n"
+            summary="${summary}${br}: 0
+          "
           fi
         done
 
         if [ "$any_compromised" -eq 0 ]; then
           final="$repo_name: No compromised packages found. ✅"
         else
-          final="$repo_name: Compromised packages found:\n${summary}. ❌"
+          final="$repo_name: Compromised packages found ❌:
+        ${summary}.
+        "
         fi
 
-        echo "summary=$final" >> $GITHUB_ENV
+        {
+        echo "summary<<EOF"
+        echo -e "$final"
+        echo "EOF"
+        } >> $GITHUB_ENV
       shell: bash
 
     - name: Notify Slack
